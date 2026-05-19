@@ -1,0 +1,47 @@
+{
+  "trust_policy": {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Sid": "AgentCoreAssumeRole",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": ["bedrock-agentcore.amazonaws.com", "ecs-tasks.amazonaws.com"]
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": { "aws:SourceAccount": "${AWS_ACCOUNT_ID}" },
+        "ArnLike": { "aws:SourceArn": "arn:aws:bedrock-agentcore:us-east-1:${AWS_ACCOUNT_ID}:*" }
+      }
+    }]
+  },
+  "permissions_policy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "ReadPostgresSecret",
+        "Effect": "Allow",
+        "Action": ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"],
+        "Resource": "arn:aws:secretsmanager:us-east-1:${AWS_ACCOUNT_ID}:secret:${POSTGRES_SECRET_NAME}*"
+      },
+      {
+        "Sid": "DecryptSecretKMS",
+        "Effect": "Allow",
+        "Action": ["kms:Decrypt", "kms:DescribeKey"],
+        "Resource": "arn:aws:kms:us-east-1:${AWS_ACCOUNT_ID}:key/${KMS_KEY_ID}",
+        "Condition": { "StringEquals": { "kms:ViaService": "secretsmanager.us-east-1.amazonaws.com" } }
+      },
+      {
+        "Sid": "PullFromECR",
+        "Effect": "Allow",
+        "Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:BatchCheckLayerAvailability", "ecr:GetAuthorizationToken"],
+        "Resource": "*"
+      },
+      {
+        "Sid": "AgentCoreRuntimeLogs",
+        "Effect": "Allow",
+        "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+        "Resource": "arn:aws:logs:us-east-1:${AWS_ACCOUNT_ID}:log-group:/aws/bedrock-agentcore/*"
+      }
+    ]
+  }
+}

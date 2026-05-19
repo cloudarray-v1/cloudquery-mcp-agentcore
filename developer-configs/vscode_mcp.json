@@ -1,0 +1,18 @@
+{
+  "_readme": [
+    "Run deploy.sh first — it will replace this file with your real endpoint URL.",
+    "Prereq: npm install -g mcp-remote",
+    "VS Code: Cmd+Shift+P → MCP: Open User Configuration"
+  ],
+  "inputs": [
+    {"type": "promptString", "id": "aws-profile", "description": "AWS profile (blank = default)", "password": false}
+  ],
+  "servers": {
+    "CloudQuery": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["mcp-remote", "AGENTCORE_ENDPOINT/mcp", "--header", "x-aws-region:us-east-1"],
+      "env": {"AWS_PROFILE": "${input:aws-profile}"}
+    }
+  }
+}

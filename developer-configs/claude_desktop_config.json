@@ -1,0 +1,14 @@
+{
+  "_readme": [
+    "Run deploy.sh first — it will replace this file with your real endpoint URL.",
+    "Prereq: npm install -g mcp-remote",
+    "macOS: ~/Library/Application Support/Claude/claude_desktop_config.json",
+    "Linux: ~/.config/Claude/claude_desktop_config.json"
+  ],
+  "mcpServers": {
+    "cloudquery": {
+      "command": "npx",
+      "args": ["mcp-remote", "AGENTCORE_ENDPOINT/mcp", "--header", "x-aws-region:us-east-1"]
+    }
+  }
+}

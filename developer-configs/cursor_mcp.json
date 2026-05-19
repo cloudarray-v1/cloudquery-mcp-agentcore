@@ -1,0 +1,10 @@
+{
+  "_readme": [
+    "Run deploy.sh first — it will replace this file with your real endpoint URL.",
+    "Prereq: npm install -g mcp-remote",
+    "Cursor → Settings → Cursor Settings → Tools and Integrations → Add MCP Server"
+  ],
+  "name": "cloudquery",
+  "command": "npx",
+  "args": ["mcp-remote", "AGENTCORE_ENDPOINT/mcp", "--header", "x-aws-region:us-east-1"]
+}

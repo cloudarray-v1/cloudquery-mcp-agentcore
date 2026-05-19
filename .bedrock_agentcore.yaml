@@ -1,0 +1,31 @@
+name: cloudquery-mcp
+description: >
+  CloudQuery MCP Server in PostgreSQL mode.
+  Exposes cloud asset inventory to AI agents via MCP.
+
+runtime:
+  executor: CONTAINER
+  image: "${ECR_IMAGE_URI}"
+  port: 8080
+  health_check_path: /mcp
+  protocol: MCP
+
+environment:
+  - name: AWS_REGION
+    value: us-east-1
+  - name: HTTP_ADDRESS
+    value: ":8080"
+  - name: CQAPI_LOG_LEVEL
+    value: "info"
+  - name: POSTGRES_SECRET_ARN
+    value: "${POSTGRES_SECRET_ARN}"
+
+iam:
+  execution_role_arn: "${AGENTCORE_EXECUTION_ROLE_ARN}"
+
+scaling:
+  min_instances: 1
+  max_instances: 5
+
+authorizer:
+  type: AWS_IAM

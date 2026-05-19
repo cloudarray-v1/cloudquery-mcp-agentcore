@@ -1,0 +1,11 @@
+.env
+*.env
+pg-credentials.json
+*credentials*.json
+*secret*.json
+/tmp/resolved_agentcore.yaml
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+*.swp

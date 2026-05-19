@@ -53,13 +53,13 @@ echo "    ✓ Image pushed"
 
 # 4. IAM role
 echo "[4/5] Creating IAM execution role..."
-TRUST=$(cat iam/execution-role.json | python3 -c "
+TRUST=$(python3 -c "
 import json,sys,os
 d=json.load(sys.stdin)
 t=json.dumps(d['trust_policy']).replace('\${AWS_ACCOUNT_ID}',os.environ['AWS_ACCOUNT_ID'])
-print(t)" AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}")
+print(t)" AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}" < iam/execution-role.json)
 
-PERMS=$(cat iam/execution-role.json | python3 -c "
+PERMS=$(python3 -c "
 import json,sys,os
 d=json.load(sys.stdin)
 p=json.dumps(d['permissions_policy'])
@@ -68,7 +68,7 @@ p=p.replace('\${POSTGRES_SECRET_NAME}',os.environ['POSTGRES_SECRET_NAME'])
 p=p.replace('\${KMS_KEY_ID}',os.environ.get('KMS_KEY_ID','*'))
 print(p)" AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}" \
   POSTGRES_SECRET_NAME="${POSTGRES_SECRET_NAME}" \
-  KMS_KEY_ID="${KMS_KEY_ID:-*}")
+  KMS_KEY_ID="${KMS_KEY_ID:-*}" < iam/execution-role.json)
 
 ROLE_ARN=$(aws iam create-role \
     --role-name "${IAM_ROLE_NAME}" \

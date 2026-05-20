@@ -1,27 +1,31 @@
 # cloudquery-mcp-agentcore
 
-Deploy the official [CloudQuery MCP Server](https://www.cloudquery.io/docs/platform/features/mcp-server) (PostgreSQL mode) onto **Amazon Bedrock AgentCore Runtime** and expose it to your developers via Claude Desktop, Cursor, and VS Code.
+Deploy the official [CloudQuery MCP Server](https://www.cloudquery.io/docs/platform/features/mcp-server) (PostgreSQL mode) onto **Amazon Bedrock AgentCore Runtime** so your developers can query your cloud asset inventory by asking plain-English questions directly inside Claude Desktop, Cursor, or VS Code.
 
-No LLM is bundled — the MCP server is a pure data layer that translates AI tool calls into SQL queries against your CloudQuery asset inventory database. The LLM is whatever your IDE provides (Claude, Copilot, etc.).
+No custom code. No LLM bundled. Just the official CloudQuery binary, wrapped in a container, running on AWS serverless infrastructure.
 
 ---
 
-## How it works
+## What this actually does
 
-Developers connect their IDE to the AgentCore-hosted MCP server using `mcp-remote`. When they ask a question like _"which EC2 instances have a public IP?"_, their IDE's AI calls the MCP tool, which runs the equivalent SQL against your CloudQuery PostgreSQL database and returns the rows.
+CloudQuery syncs your AWS (and GCP, Azure) resources into a PostgreSQL database on a schedule. This project puts an MCP server in front of that database and hosts it on Bedrock AgentCore so your developers can talk to it from their IDEs.
+
+When a developer asks _"which EC2 instances have a public IP?"_ — their IDE's AI (Claude, Copilot, etc.) calls the MCP tool, which runs the equivalent SQL against your CloudQuery inventory and returns the rows. The AI never touches your database directly.
 
 ```
 Developer IDE (Claude Desktop / Cursor / VS Code)
         │
-        │  stdio → mcp-remote (npm) → Streamable HTTP + AWS SigV4
+        │  stdio → mcp-remote (npm) → HTTPS + AWS SigV4
         ▼
 Amazon Bedrock AgentCore Runtime  (us-east-1)
-  └── MicroVM: cq-platform-mcp v1.8.1  (arm64, port 8080, path /mcp)
-        │  entrypoint.sh fetches POSTGRES_CONNECTION_STRING
-        │  from Secrets Manager via IAM role at cold start
-        ▼  (VPC — same subnet as RDS)
-RDS / Aurora PostgreSQL
-  └── cq_inventory database  (synced by CloudQuery CLI)
+  └── MicroVM: cq-platform-mcp v1.8.1  (arm64, port 8000, path /mcp)
+        │
+        │  entrypoint.sh calls Secrets Manager via IAM role at startup
+        │  builds POSTGRES_CONNECTION_STRING in memory, never on disk
+        │  os.execv() replaces Python with the Go binary (PID 1)
+        ▼
+RDS / Aurora PostgreSQL  (same VPC, private subnet)
+  └── cq_inventory database  ← synced by CloudQuery CLI on a schedule
 ```
 
 ---
@@ -29,113 +33,149 @@ RDS / Aurora PostgreSQL
 ## Infrastructure components
 
 ### Amazon ECR
-Stores the Docker container image. The image wraps the official `cq-platform-mcp` Go binary (arm64). Built by `deploy.sh` and pulled by AgentCore at cold start.
+Stores the Docker container image. The image downloads the official `cq-platform-mcp` Go binary at build time (arm64 — required by AgentCore). Built and pushed by `deploy.sh`.
 
 ### Amazon Bedrock AgentCore Runtime
-The serverless MicroVM host. Key properties:
-- **Protocol:** MCP — AgentCore acts as a transparent proxy, routing `/mcp` POST requests directly to the container
-- **Architecture:** arm64 (required by AgentCore)
-- **Port:** 8080
-- **Autoscaling:** min 1, max 5 instances
-- **Session routing:** `Mcp-Session-Id` header ensures a developer's requests always hit the same MicroVM instance
-- **Network:** VPC mode — MicroVMs run in the same VPC and subnet as your RDS instance
-- **Auth:** AWS IAM SigV4 — developers sign requests with their AWS credentials via `mcp-remote`
+The serverless MicroVM host for the MCP server. Key facts:
+- **Port:** 8000 (AgentCore hardcodes this for MCP — do not change)
+- **Path:** `/mcp` (required by AgentCore MCP protocol contract)
+- **Architecture:** arm64 (required — amd64 will fail at deploy time)
+- **Protocol:** MCP over Streamable HTTP
+- **Session routing:** AgentCore stamps every request with `Mcp-Session-Id` and routes the same session to the same MicroVM instance
+- **Scaling:** min 1, max 5 MicroVM instances (configurable)
+- **Network:** VPC mode — MicroVMs run in the same VPC and subnet as RDS so no traffic leaves your network
 
 ### AgentCore Runtime Endpoint
-A named endpoint (`default`) that sits in front of the runtime and provides the stable invoke URL. AgentCore automatically creates a `DEFAULT` endpoint; `deploy.sh` creates an additional `default` endpoint.
+AgentCore automatically creates a `DEFAULT` endpoint when the runtime is created. `deploy.sh` creates an additional `default` endpoint. Use the `default` endpoint URL in developer configs.
+
+The invoke URL pattern is:
+```
+https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/YOUR_RUNTIME_ID/invoke
+```
 
 ### AWS Secrets Manager
-Holds the RDS connection credentials as a JSON secret:
+Holds your RDS credentials as a JSON secret. `entrypoint.sh` fetches this at container startup using the MicroVM's IAM role — no passwords in the image, no build args, no environment variable injection at deploy time.
+
+Expected secret format:
 ```json
 {
   "username": "cloudquery",
   "password": "...",
-  "host": "mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
-  "port": 5432,
-  "dbname": "cq_inventory"
+  "host":     "mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+  "port":     5432,
+  "dbname":   "cq_inventory"
 }
 ```
-`entrypoint.sh` fetches this at container startup via the IAM execution role — no credentials are stored in the image or passed as build arguments.
 
 ### IAM Execution Role
-Attached to the AgentCore MicroVM. Grants:
-- `secretsmanager:GetSecretValue` — fetch the RDS credentials at startup
-- `ecr:*` — pull the container image from ECR
-- `logs:*` — write container logs to CloudWatch
+Attached to the AgentCore MicroVM at runtime. Grants the minimum permissions needed:
+- `secretsmanager:GetSecretValue` — fetch RDS credentials at startup
+- `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage` etc. — pull the image from ECR
+- `logs:CreateLogStream`, `logs:PutLogEvents` — write to CloudWatch
 - `bedrock-agentcore:*` — control plane operations
 
-### RDS / Aurora PostgreSQL
-Your cloud asset inventory database, populated by the CloudQuery CLI. The AgentCore MicroVMs connect to it over port 5432 inside the VPC. The RDS security group must allow inbound TCP 5432 from the AgentCore security group.
+Developers also need `bedrock-agentcore:InvokeAgentRuntime` on their personal IAM user/role to call the endpoint.
 
-### CloudQuery CLI (run separately)
-Syncs your AWS (and optionally GCP, Azure) resources into the `cq_inventory` database on a schedule. This is not part of this repo — it runs as a separate process (Lambda, ECS task, cron job, etc.).
+### RDS / Aurora PostgreSQL
+Your cloud asset inventory database. The AgentCore MicroVMs connect to it over port 5432 inside the VPC.
+
+**Security group requirement:** the RDS security group must allow inbound TCP 5432 from the AgentCore security group. Since both run in the same VPC this stays entirely private.
 
 ### VPC / Networking
 ```
 VPC
-├── Subnet(s)  ← AgentCore MicroVMs run here
-│     └── Security group: AgentCore-SG
-│           outbound: 5432 → RDS-SG
-│           outbound: 443  → Secrets Manager, ECR (via VPC endpoints or NAT)
-└── Subnet(s)  ← RDS runs here
-      └── Security group: RDS-SG
-            inbound: 5432 from AgentCore-SG
+├── Subnets  ← AgentCore MicroVMs run here
+│     └── AgentCore security group
+│           outbound 5432 → RDS security group
+│           outbound 443  → Secrets Manager (VPC endpoint or NAT)
+│           outbound 443  → ECR (VPC endpoint or NAT)
+└── Subnets  ← RDS runs here
+      └── RDS security group
+            inbound 5432 from AgentCore security group
 ```
 
-### mcp-remote (developer-side, npm)
-A local npm proxy that bridges stdio (what IDEs use for MCP) to Streamable HTTP (what AgentCore exposes). It handles AWS SigV4 request signing automatically using the developer's local AWS credentials (`~/.aws/credentials`, SSO, or environment variables).
+If your VPC has no NAT gateway, add VPC Interface Endpoints for:
+- `com.amazonaws.us-east-1.secretsmanager`
+- `com.amazonaws.us-east-1.ecr.api`
+- `com.amazonaws.us-east-1.ecr.dkr`
+
+Without these, `entrypoint.sh` will hang on the Secrets Manager call and AgentCore will time out with `jsonrpc -32011 initialization time exceeded`.
+
+### CloudQuery CLI (runs separately)
+Syncs your AWS/GCP/Azure resources into `cq_inventory` on a schedule. Not part of this repo — run it as a Lambda, ECS task, or cron job. See the [CloudQuery AWS integration guide](https://www.cloudquery.io/docs/platform/integration-guides/setting-up-an-aws-integration).
+
+### mcp-remote (developer-side)
+An npm package that bridges stdio (what IDEs use for MCP) to Streamable HTTP (what AgentCore exposes). Handles AWS SigV4 request signing automatically from the developer's local credential chain (`~/.aws/credentials`, SSO, environment variables).
 
 ---
 
-## Quick start
+## Prerequisites
 
-### Prerequisites
-- AWS CLI v2 configured
-- Docker with buildx
+- AWS CLI v2 (`aws --version`)
+- Docker with buildx support
 - Python 3
-- RDS/Aurora PostgreSQL instance synced by CloudQuery CLI
-- Secrets Manager secret containing RDS credentials (see format above)
+- An RDS/Aurora PostgreSQL instance already synced by CloudQuery CLI
+- Your deploying IAM user needs: `ecr:*`, `iam:CreateRole`, `iam:PutRolePolicy`, `secretsmanager:CreateSecret`, `bedrock-agentcore:*`
 
-### 1. Create the secret
+---
+
+## Deployment
+
+### 1. Create the Secrets Manager secret
 ```bash
 aws secretsmanager create-secret \
   --name cloudquery/pg-conn \
-  --secret-string '{"username":"cloudquery","password":"...","host":"...","port":5432,"dbname":"cq_inventory"}' \
+  --secret-string '{
+    "username": "cloudquery",
+    "password": "your-password",
+    "host":     "mydb.cluster-xyz.us-east-1.rds.amazonaws.com",
+    "port":     5432,
+    "dbname":   "cq_inventory"
+  }' \
   --region us-east-1
 ```
 
-### 2. Set environment variables
+### 2. Export required variables
 ```bash
 export POSTGRES_SECRET_ARN=arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:cloudquery/pg-conn-XxXxXx
+export SUBNET_ID=subnet-xxxxxxxx          # same subnet as your RDS instance
+export SECURITY_GROUP_ID=sg-xxxxxxxx      # security group for the AgentCore MicroVMs
 
-# Optional — only if your secret is encrypted with a custom KMS key
+# Only needed if your secret uses a custom KMS key
 export KMS_KEY_ID=your-kms-key-id
 ```
 
-### 3. Deploy
+### 3. Run deploy.sh
 ```bash
 chmod +x deploy.sh && ./deploy.sh
 ```
 
-`deploy.sh` runs these steps in order:
-1. Create ECR repository (idempotent)
-2. Build Docker image for `linux/arm64` and push to ECR
-3. Create IAM execution role with least-privilege permissions
-4. Create AgentCore Runtime with VPC network config, MCP protocol, arm64 container
-5. Create AgentCore Runtime Endpoint (`default`)
-6. Write resolved IDE configs to `developer-configs/`
+What `deploy.sh` does in order:
+1. Creates the ECR repository (idempotent)
+2. Builds the Docker image for `linux/arm64` and pushes to ECR
+3. Creates the IAM execution role from `iam/execution-role.json`
+4. Creates the AgentCore Runtime (`bedrock-agentcore-control create-agent-runtime`)
+5. Creates the AgentCore Runtime Endpoint (`bedrock-agentcore-control create-agent-runtime-endpoint`)
+6. Writes resolved IDE configs to `developer-configs/`
+
+### 4. Save your runtime ID
+After deploy completes, save the printed `RUNTIME_ID` to a local `.env` file (already in `.gitignore`):
+```bash
+echo "RUNTIME_ID=cloudquery_mcp-xxxxxxxx" >> .env
+echo "POSTGRES_SECRET_ARN=arn:aws:..." >> .env
+```
 
 ---
 
-## Developer setup (one time per developer)
+## Developer setup
 
-### Step 1 — Install mcp-remote
+### Step 1 — Install mcp-remote (one time)
 ```bash
 npm install -g mcp-remote
 ```
 
-### Step 2 — Configure AWS credentials
-Developers need `bedrock-agentcore:InvokeAgentRuntime` permission on the runtime ARN. Add this inline policy to their IAM user or role:
+### Step 2 — Get AWS credentials
+Developers need this IAM permission on their user or role:
 ```json
 {
   "Version": "2012-10-17",
@@ -147,15 +187,26 @@ Developers need `bedrock-agentcore:InvokeAgentRuntime` permission on the runtime
 }
 ```
 
-### Step 3 — Copy the IDE config
+### Step 3 — Configure your IDE
 
 After `deploy.sh` completes, configs with the real endpoint URL are written to `developer-configs/`.
 
-**Claude Desktop** — merge into:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
-
-Then restart Claude Desktop.
+**Claude Desktop** — merge into `~/Library/Application Support/Claude/claude_desktop_config.json` then restart:
+```json
+{
+  "mcpServers": {
+    "cloudquery": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/YOUR_RUNTIME_ID/invoke",
+        "--header",
+        "x-aws-region:us-east-1"
+      ]
+    }
+  }
+}
+```
 
 **Cursor** — Settings → Cursor Settings → Tools and Integrations → Add MCP Server → paste `developer-configs/cursor_mcp.json`
 
@@ -181,15 +232,15 @@ Then restart Claude Desktop.
 
 ---
 
-## Available MCP tools (PostgreSQL mode)
+## Available MCP tools
 
 | Tool | Description |
 |---|---|
 | `postgres-list-plugins` | List CloudQuery integrations present in the DB |
 | `postgres-table-search-regex` | Search for tables by regex (e.g. `aws_ec2.*`) |
-| `postgres-table-schemas` | Get column definitions and types for given tables |
+| `postgres-table-schemas` | Get column definitions and types for a table |
 | `postgres-column-search` | Search for columns by regex across all tables |
-| `execute-postgres-query` | Run a SQL query against the CloudQuery inventory DB |
+| `execute-postgres-query` | Run a SQL query against the inventory DB |
 
 ### Example prompts
 - _"List all EC2 instances that have a public IP address"_
@@ -197,6 +248,49 @@ Then restart Claude Desktop.
 - _"Find all IAM roles with AdministratorAccess attached"_
 - _"Which RDS instances don't have encryption at rest enabled?"_
 - _"List all security groups with port 22 open to 0.0.0.0/0"_
+- _"How many resources do I have per AWS region?"_
+
+---
+
+## Debugging
+
+Log level can be changed **without rebuilding the container** by updating the runtime environment variables directly.
+
+### Enable debug logging
+```bash
+export RUNTIME_ID=cloudquery_mcp-xxxxxxxx
+export POSTGRES_SECRET_ARN=arn:aws:secretsmanager:...
+./scripts/debug-on.sh
+```
+
+### Restore info logging
+```bash
+./scripts/debug-off.sh
+```
+
+### Tail live logs
+```bash
+./scripts/logs.sh
+```
+
+Or manually:
+```bash
+aws logs tail /aws/bedrock-agentcore/cloudquery_mcp --follow --region us-east-1
+```
+
+---
+
+## Common issues
+
+| Error | Cause | Fix |
+|---|---|---|
+| `jsonrpc -32011 initialization time exceeded` | Wrong port or no route to Secrets Manager | Ensure port is 8000, add VPC endpoints for Secrets Manager and ECR |
+| `architecture incompatible` | Image built for amd64 | Build with `--platform linux/arm64`, use `arm64` binary URL in Dockerfile |
+| `KeyError: AWS_ACCOUNT_ID` | Python subprocess not inheriting env vars | Add `export AWS_ACCOUNT_ID` before python3 calls in deploy.sh |
+| `invalid argument --agent-runtime-id` | Wrong CLI argument structure | Use `--agent-runtime-artifact` with `containerConfiguration.containerUri` |
+| Two endpoints `default` and `DEFAULT` | deploy.sh ran twice | Delete with `aws bedrock-agentcore-control delete-agent-runtime-endpoint --name DEFAULT` |
+| `-` not allowed in runtime name | AgentCore name pattern is `[a-zA-Z][a-zA-Z0-9_]*` | Use underscores: `cloudquery_mcp` |
+| `no permission list agent runtime endpoint` | Deployer IAM user missing permissions | Add `bedrock-agentcore:*` to your personal IAM user or role |
 
 ---
 
@@ -204,22 +298,26 @@ Then restart Claude Desktop.
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Downloads official `cq-platform-mcp` binary (arm64), runs as non-root |
-| `entrypoint.sh` | Fetches RDS credentials from Secrets Manager at startup, exec's binary |
+| `Dockerfile` | Downloads `cq-platform-mcp` binary (arm64), non-root, port 8000 |
+| `entrypoint.sh` | Fetches secret from Secrets Manager, builds conn string, exec's binary |
 | `.bedrock_agentcore.yaml` | AgentCore runtime config reference |
-| `deploy.sh` | Full provisioning: ECR → IAM → AgentCore Runtime → Endpoint → dev configs |
-| `iam/execution-role.json` | IAM trust policy + permissions policy template |
-| `developer-configs/` | IDE configs for Claude Desktop, Cursor, VS Code (written by deploy.sh) |
+| `deploy.sh` | Full provisioning: ECR → Docker → IAM → Runtime → Endpoint → dev configs |
+| `iam/execution-role.json` | IAM trust + permissions policy template |
+| `developer-configs/` | IDE configs written by deploy.sh with real endpoint URL |
+| `scripts/debug-on.sh` | Enable debug logging without rebuilding the container |
+| `scripts/debug-off.sh` | Restore info logging without rebuilding the container |
+| `scripts/logs.sh` | Tail live CloudWatch logs for the runtime |
 
 ---
 
-## Security notes
+## Security
 
-- No credentials are stored in the Docker image, passed as build args, or written to disk
-- The IAM execution role is the only auth surface — revoking it instantly cuts all DB access
-- RDS is in a VPC — AgentCore MicroVMs connect over private networking, not the public internet
+- No credentials in the image, build args, or environment variable injection
+- The IAM execution role is the only credential surface — revoke it to cut all DB access instantly
+- RDS is in a VPC — MicroVMs connect over private networking only
 - Developers authenticate via AWS SigV4 — no shared API keys to distribute or rotate
-- The container runs as a non-root user (uid 10001)
+- Container runs as non-root user (uid 10001)
+- Connection string is built in memory by `entrypoint.sh` and never written to disk
 
 ---
 

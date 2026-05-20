@@ -82,7 +82,7 @@ aws iam put-role-policy \
     --policy-document "${PERMS}"
 echo "    ✓ ${ROLE_ARN}"
 
-# ── Step 5a: Create AgentCore Runtime ────────────────────────────────────────
+# 5a. Create AgentCore Runtime
 echo "[5a/6] Creating AgentCore Runtime..."
 RUNTIME_ID=$(aws bedrock-agentcore-control create-agent-runtime \
     --agent-runtime-name "${AGENTCORE_ENDPOINT_NAME}" \
@@ -111,13 +111,14 @@ RUNTIME_ID=$(aws bedrock-agentcore-control create-agent-runtime \
 echo "    ✓ Runtime ID: ${RUNTIME_ID}"
 
 
-# ── Step 5b: Create AgentCore Runtime Endpoint ───────────────────────────────
+# 5b. Create AgentCore Runtime Endpoint
 echo "[5b/6] Creating AgentCore Runtime Endpoint..."
 ENDPOINT_URL=$(aws bedrock-agentcore-control create-agent-runtime-endpoint \
     --agent-runtime-id "${RUNTIME_ID}" \
     --name "default" \
     --region "${REGION}" \
-    --query "liveVersion" --output text)
+    --query "liveVersion" \
+    --output text)
 echo "    ✓ Endpoint URL: ${ENDPOINT_URL}"
 
 # Write resolved developer configs

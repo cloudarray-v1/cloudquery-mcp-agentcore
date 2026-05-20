@@ -1,0 +1,65 @@
+<svg width="100%" viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>CloudQuery MCP — Container startup sequence</title>
+  <desc>Five steps from ECR pull to cq-platform-mcp serving requests</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: ui-sans-serif, system-ui, sans-serif; }
+      .th    { font-size: 13px; font-weight: 600; fill: #444441; }
+      .ts    { font-size: 11px; font-weight: 400; fill: #5F5E5A; }
+      .amber { font-size: 13px; font-weight: 600; fill: #412402; }
+      .teal  { font-size: 13px; font-weight: 600; fill: #04342C; }
+      .note  { font-size: 11px; font-weight: 400; fill: #888780; }
+    </style>
+  </defs>
+
+  <!-- Steps -->
+  <rect x="20"  y="50" width="104" height="64" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+  <text class="th"  x="72"  y="76"  text-anchor="middle">ECR pull</text>
+  <text class="ts"  x="72"  y="94"  text-anchor="middle">cq-platform-mcp</text>
+
+  <line x1="124" y1="82" x2="148" y2="82" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="148" y="50" width="104" height="64" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+  <text class="th"  x="200" y="76"  text-anchor="middle">entrypoint.sh</text>
+  <text class="ts"  x="200" y="94"  text-anchor="middle">Python starts</text>
+
+  <line x1="252" y1="82" x2="276" y2="82" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="276" y="50" width="128" height="64" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+  <text class="amber" x="340" y="74"  text-anchor="middle">Secrets Manager</text>
+  <text class="ts"    x="340" y="92"  text-anchor="middle" style="fill:#854F0B">GetSecretValue</text>
+  <text class="ts"    x="340" y="108" text-anchor="middle" style="fill:#854F0B">via IAM role</text>
+
+  <line x1="404" y1="82" x2="428" y2="82" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="428" y="50" width="104" height="64" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+  <text class="th"  x="480" y="76"  text-anchor="middle">os.execv()</text>
+  <text class="ts"  x="480" y="94"  text-anchor="middle">replaces Python</text>
+
+  <line x1="532" y1="82" x2="556" y2="82" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="556" y="50" width="104" height="64" rx="8" fill="#E1F5EE" stroke="#1D9E75" stroke-width="0.5"/>
+  <text class="teal" x="608" y="76"  text-anchor="middle">MCP server</text>
+  <text class="ts"   x="608" y="94"  text-anchor="middle" style="fill:#085041">:8080/mcp ready</text>
+
+  <!-- Annotations -->
+  <line x1="72"  y1="114" x2="72"  y2="134" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="2 2" fill="none"/>
+  <line x1="200" y1="114" x2="200" y2="134" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="2 2" fill="none"/>
+  <line x1="340" y1="114" x2="340" y2="134" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="2 2" fill="none"/>
+  <line x1="480" y1="114" x2="480" y2="134" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="2 2" fill="none"/>
+  <line x1="608" y1="114" x2="608" y2="134" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="2 2" fill="none"/>
+
+  <text class="note" x="72"  y="148" text-anchor="middle">IAM role on MicroVM</text>
+  <text class="note" x="200" y="148" text-anchor="middle">reads SECRET_ARN env</text>
+  <text class="note" x="340" y="148" text-anchor="middle">conn string in memory</text>
+  <text class="note" x="480" y="148" text-anchor="middle">PID 1 = Go binary</text>
+  <text class="note" x="608" y="148" text-anchor="middle">no Python remains</text>
+
+  <!-- Security callout -->
+  <rect x="20" y="172" width="640" height="52" rx="8" fill="none" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="340" y="194" text-anchor="middle" style="font-family: ui-sans-serif, system-ui, sans-serif; font-size:13px; font-weight:600; fill:#444441">No credentials in the image, env vars, or disk</text>
+  <text x="340" y="212" text-anchor="middle" style="font-family: ui-sans-serif, system-ui, sans-serif; font-size:11px; fill:#888780">The IAM role is the only auth surface — revoke it to cut all access instantly</text>
+</svg>

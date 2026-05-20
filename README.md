@@ -62,3 +62,18 @@ chmod +x deploy.sh && ./deploy.sh
 | `deploy.sh` | One-command ECR + IAM + AgentCore deployment |
 | `iam/execution-role.json` | Least-privilege IAM trust + permissions policy |
 | `developer-configs/` | IDE configs for Claude Desktop, Cursor, VS Code |
+
+
+## Diagrams
+
+### System overview
+![Architecture](docs/architecture.svg)
+
+### Container startup
+![Startup](docs/startup.svg)
+
+### Request lifecycle
+![Request](docs/request.svg)
+
+### Deployment steps
+![Deploy](docs/deploy.svg)

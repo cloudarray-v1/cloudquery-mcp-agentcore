@@ -82,28 +82,41 @@ aws iam put-role-policy \
     --policy-document "${PERMS}"
 echo "    ✓ ${ROLE_ARN}"
 
-# 5. Register AgentCore endpoint
-echo "[5/5] Registering AgentCore endpoint..."
-ENDPOINT_URL=$(aws bedrock-agentcore create-agent-runtime \
+# ── Step 5a: Create AgentCore Runtime ────────────────────────────────────────
+echo "[5a/6] Creating AgentCore Runtime..."
+RUNTIME_ID=$(aws bedrock-agentcore-control create-agent-runtime \
     --agent-runtime-name "${AGENTCORE_ENDPOINT_NAME}" \
-    --container-configuration "{
-        \"imageUri\": \"${ECR_IMAGE_URI}\",
-        \"executionRoleArn\": \"${ROLE_ARN}\",
-        \"environment\": [
-            {\"name\": \"AWS_REGION\",         \"value\": \"${REGION}\"},
-            {\"name\": \"HTTP_ADDRESS\",        \"value\": \":8080\"},
-            {\"name\": \"CQAPI_LOG_LEVEL\",     \"value\": \"info\"},
-            {\"name\": \"POSTGRES_SECRET_ARN\", \"value\": \"${POSTGRES_SECRET_ARN}\"}
-        ],
-        \"port\": 8080,
-        \"protocol\": \"MCP\"
+    --description "CloudQuery MCP Server - PostgreSQL mode" \
+    --runtime-configuration "{
+        \"container\": {
+            \"imageUri\": \"${ECR_IMAGE_URI}\",
+            \"executionRoleArn\": \"${ROLE_ARN}\",
+            \"environment\": [
+                {\"name\": \"AWS_REGION\",         \"value\": \"${REGION}\"},
+                {\"name\": \"HTTP_ADDRESS\",        \"value\": \":8080\"},
+                {\"name\": \"CQAPI_LOG_LEVEL\",     \"value\": \"info\"},
+                {\"name\": \"POSTGRES_SECRET_ARN\", \"value\": \"${POSTGRES_SECRET_ARN}\"}
+            ],
+            \"port\": 8080
+        }
     }" \
+    --network-configuration "{\"allowInternetAccess\": \"DISABLED\"}" \
     --region "${REGION}" \
-    --query agentRuntimeEndpoint --output text 2>/dev/null \
-  || aws bedrock-agentcore describe-agent-runtime \
+    --query agentRuntimeId --output text 2>/dev/null \
+  || aws bedrock-agentcore-control get-agent-runtime \
     --agent-runtime-name "${AGENTCORE_ENDPOINT_NAME}" \
     --region "${REGION}" \
-    --query agentRuntimeEndpoint --output text)
+    --query agentRuntimeId --output text)
+echo "    ✓ Runtime ID: ${RUNTIME_ID}"
+
+# ── Step 5b: Create AgentCore Runtime Endpoint ───────────────────────────────
+echo "[5b/6] Creating AgentCore Runtime Endpoint..."
+ENDPOINT_URL=$(aws bedrock-agentcore-control create-agent-runtime-endpoint \
+    --agent-runtime-id "${RUNTIME_ID}" \
+    --name "default" \
+    --region "${REGION}" \
+    --query "liveVersion" --output text)
+echo "    ✓ Endpoint URL: ${ENDPOINT_URL}"
 
 # Write resolved developer configs
 python3 - <<PYEOF
